@@ -1,38 +1,3 @@
-Script photoshop jsx
-Install UXP Developer Tool:Download from: https://developer.adobe.com/photoshop/uxp/2022/guides/devtool/Install and launch itThis gives you a full Chrome DevTools experience!How to Use:Launch UXP Developer ToolLoad your script:Click "Add Plugin..."Select the folder containing your scriptOr click "Load" if using manifest.jsonWatch Console:Click "Debug" button next to your pluginDevTools opens with Console, Network, Sources tabsAll console.log() statements appear hereAll errors show with full stack tracesSet Breakpoints:Go to "Sources" tabFind your scriptClick line numbers to set breakpointsScript pauses at breakpoints for inspection
-
-
-Regards,
-
- 
-
-Shashikant Zarekar
-
-Sr. Brand Manager - International and Domestic Markets
-
- 
-
-
-
-GEM Engserv Pvt Ltd.
-
- 
-
-A-103, The Great Eastern Chambers, Plot 28, Sector 11, CBD Belapur, Navi Mumbai 400614
-
-M:+9177770 16824 | www.gemengserv.com
-
- 
-
-Customer Focus | Integrity | Ownership | Value Creation Through Competence | Respect for Individual
-
- 
-
-
-
-Here's the **complete Gemini Photoshop script as a single .jsx file** (no plugin structure needed):
-
-## **GeminiPhotoshop.jsx**
 
 ```javascript
 /*
