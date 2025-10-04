@@ -85,20 +85,31 @@ def edit_selection(image, drawable, prompt):
 
         # Load result
         temp_file2 = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
-        with open(temp_file2.name, 'wb') as f:
-            f.write(base64.b64decode(result_b64))
-        result_layer = pdb.gimp_file_load_layer(image, temp_file2.name)
+        temp_path2 = temp_file2.name
+        temp_file2.write(base64.b64decode(result_b64))
+        temp_file2.close()
+
+        result_layer = pdb.gimp_file_load_layer(image, temp_path2)
         pdb.gimp_image_insert_layer(image, result_layer, None, 0)
         pdb.gimp_item_set_name(result_layer, "Gemini Edit")
+
+        # Force a UI update before trying to move the layer.
+        # This can help with scripting race conditions in some GIMP versions.
+        pdb.gimp_displays_flush()
+
+        # Set the layer's final position.
         pdb.gimp_layer_translate(result_layer, x1, y1)
 
-        # Scale if needed
+        # Another flush for good measure.
+        pdb.gimp_displays_flush()
+
+        # Scale if needed to match original selection
         lw = pdb.gimp_drawable_width(result_layer)
         lh = pdb.gimp_drawable_height(result_layer)
         if lw != w or lh != h:
             pdb.gimp_layer_scale(result_layer, w, h, False)
 
-        os.unlink(temp_file2.name)
+        os.unlink(temp_path2)
         pdb.gimp_message("✅ Edit complete!")
 
     except Exception as e:
