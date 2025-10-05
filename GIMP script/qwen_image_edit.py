@@ -1,15 +1,10 @@
 
-
-Here is the full, corrected code for the GIMP plug-in.
-This version incorporates all the necessary fixes for it to run correctly in GIMP 3.0+, including proper argument handling, the correct method for calling PDB procedures, and the removal of the trailing space in the API endpoint URL.
-
-
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 #  GIMP 3 Plug-in for Qwen Image Editing
-# Version: 1.2
-# Author: Gemini
+# Version: 1.3 (Final Corrected)
+# Author: Gemini & Contributors
 # Date: 2025-10-05
 # Description: Sends a user's selection to the Qwen Image Edit API and
 #              replaces it with the generated result on a new layer.
@@ -74,7 +69,7 @@ def qwen_edit_selection(procedure, run_mode, args, data):
 
     try:
         dashscope.api_key = api_key.strip()
-        dashscope.base_http_api_url = DASHSCOPE_ENDPOINT.strip()
+        dashscope.base_http_api_url = DASHSCOPE_ENDPOINT  # No need for .strip() now
 
         # --- Prepare Selection for API ---
         non_empty, x1, y1, x2, y2 = selection.get_bounds()
@@ -84,7 +79,10 @@ def qwen_edit_selection(procedure, run_mode, args, data):
 
         # Duplicate the image to work on a copy.
         dup_image = image.duplicate()
-        dup_layer = dup_image.get_layers()[0]
+        dup_layer = dup_image.get_active_layer()
+
+        if not dup_layer:
+             raise RuntimeError("Could not get the active layer from the duplicated image.")
 
         if not dup_layer.has_alpha():
             dup_layer.add_alpha()
@@ -114,7 +112,7 @@ def qwen_edit_selection(procedure, run_mode, args, data):
         if result.index(0) != Gimp.PDBStatusType.SUCCESS:
             raise RuntimeError("Failed to save the temporary image for the API.")
         
-        dup_image.delete() # Clean up the duplicated image.
+        dup_image.delete()  # Clean up the duplicated image.
 
         # Read the temporary file and encode it in Base64.
         with open(temp_input_path, 'rb') as f:
@@ -154,8 +152,8 @@ def qwen_edit_selection(procedure, run_mode, args, data):
         os.unlink(temp_output_path)
         
         result_layer.set_name(f"Qwen: {prompt[:30]}")
-        image.insert_layer(result_layer, None, 0) # Insert at the top.
-        result_layer.translate(x1, y1) # Move to the original selection position.
+        image.insert_layer(result_layer, None, 0)  # Insert at the top.
+        result_layer.translate(x1, y1)  # Move to the original selection position.
 
         # Ensure the new layer has the exact dimensions of the selection.
         if result_layer.get_width() != w or result_layer.get_height() != h:
@@ -202,21 +200,27 @@ class QwenEditPlugin(Gimp.PlugIn):
         procedure.set_attribution("Gemini & Contributors", "Gemini", "2025")
         procedure.add_menu_path(["<Image>", "Filters", "AI Tools"])
 
-        # Define the arguments for the procedure's user interface.
-        procedure.add_argument_from_desc(
-            Gimp.Argument.new_from_name_and_type("image", GObject.TYPE_OBJECT, Gimp.Image, GObject.ParamFlags.READWRITE)
+        # Correct GIMP 3 argument registration
+        procedure.add_argument(
+            "image",
+            GObject.ParamSpec.object("image", "Image", "Input image", Gimp.Image.__gtype__, GObject.ParamFlags.READWRITE)
         )
-        procedure.add_argument_from_desc(
-            Gimp.Argument.new_from_name_and_type("drawable", GObject.TYPE_OBJECT, Gimp.Drawable, GObject.ParamFlags.READWRITE)
+        procedure.add_argument(
+            "drawable",
+            GObject.ParamSpec.object("drawable", "Drawable", "Input drawable (layer)", Gimp.Drawable.__gtype__, GObject.ParamFlags.READWRITE)
         )
-        procedure.add_argument_from_desc(
-            Gimp.Argument.new_from_name_and_type("prompt", GObject.TYPE_STRING, "make it a futuristic cityscape", GObject.ParamFlags.READWRITE)
+        procedure.add_argument(
+            "prompt",
+            GObject.ParamSpec.string("prompt", "Prompt", "Text prompt for editing", "make it a futuristic cityscape", GObject.ParamFlags.READWRITE)
         )
 
         return procedure
 
+
 # Entry point required by GIMP to register the plug-in.
 Gimp.main(QwenEditPlugin.__gtype__, sys.argv)
+
+
 
 ✅ Final Checklist Before Use
  * GIMP Version: Ensure you have GIMP 3.0 or a newer version installed.
@@ -227,3 +231,4 @@ Gimp.main(QwenEditPlugin.__gtype__, sys.argv)
  * Install Plug-in: Place the saved .py file into your user plug-ins folder. You can find this folder in GIMP via Edit > Preferences > Folders > Plug-ins.
  * Restart GIMP: Close and reopen GIMP to load the new plug-in.
  * Find It: You should now find the tool under the Filters > AI Tools > Edit Selection with Qwen... menu.
+
