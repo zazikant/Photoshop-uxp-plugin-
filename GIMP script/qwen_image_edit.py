@@ -1,23 +1,29 @@
-# Below script is not tested
+below script is not tested. 
+
+✅ Final Checklist Before Use
+[ ] GIMP 3.0+ installed, works on python 3
+[ ] dashscope[oss] installed in GIMP’s Python environment
+[ ] API key set in script
+[ ] Script placed in user plug-ins folder
+[ ] GIMP restarted
 
 
-#!/usr/bin/env python
+
+
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from gimpfu import *
-import json
+import gi
+gi.require_version('Gimp', '3.0')
+from gi.repository import Gimp, GObject, GLib
+import sys # Required for the Gimp.main entry point
+
 import base64
-import tempfile
 import os
+import tempfile
+from urllib.request import urlopen
 
-# Python 2/3 compatibility for urllib
-try:
-    # Python 3
-    from urllib.request import urlopen
-except ImportError:
-    # Python 2
-    from urllib2 import urlopen
-
+# Try to import dashscope
 try:
     import dashscope
     from dashscope import MultiModalConversation
@@ -25,163 +31,161 @@ try:
 except ImportError:
     DASHSCOPE_AVAILABLE = False
 
-# 🔑 Replace with your DashScope API key
-DASHSCOPE_API_KEY = ""
+# --- CONFIGURATION ---
+DASHSCOPE_API_KEY = ""  # 🔑 Replace with your API key!
+DASHSCOPE_ENDPOINT = "https://dashscope-intl.aliyuncs.com/api/v1"
+# --- END CONFIGURATION ---
 
-# Set region endpoint (choose one):
-# Singapore: https://dashscope-intl.aliyuncs.com/api/v1
-# Beijing: https://dashscope.aliyuncs.com/api/v1
-DASHSCOPE_ENDPOINT = "https://dashscope-intl.aliyuncs.com/api/v1"  # ✅ Fixed: Removed trailing space
+def qwen_edit_selection(procedure, run_mode, args, data):
+    # GIMP 3: Extract arguments from the Gimp.ValueArray by index
+    image = args.index(0)
+    drawable = args.index(1)
+    prompt = args.index(2)
 
-def edit_selection(image, drawable, prompt):
+    # --- Pre-flight checks ---
     if not DASHSCOPE_AVAILABLE:
-        pdb.gimp_message("❌ dashscope library not installed! Run: pip install dashscope --upgrade")
-        return
+        Gimp.message("❌ dashscope library not found! Install it in GIMP's Python environment.")
+        return procedure.new_return_values(Gimp.PDBStatusType.CALLING_ERROR, GLib.Error())
 
-    if not DASHSCOPE_API_KEY:
-        pdb.gimp_message("❌ Please set your DASHSCOPE_API_KEY in the script!")
-        return
+    if not DASHSCOPE_API_KEY.strip():
+        Gimp.message("❌ Please set your DASHSCOPE_API_KEY in the script!")
+        return procedure.new_return_values(Gimp.PDBStatusType.CALLING_ERROR, GLib.Error())
 
-    if pdb.gimp_selection_is_empty(image):
-        pdb.gimp_message("⚠️ Make a selection first (use Quick Mask for soft edges)!")
-        return
+    selection = image.get_selection()
+    if selection.is_empty():
+        Gimp.message("⚠️ Make a selection first (Quick Mask recommended for soft edges)!")
+        return procedure.new_return_values(Gimp.PDBStatusType.CALLING_ERROR, GLib.Error())
+
+    Gimp.progress_init(f"Editing with Qwen: '{prompt}'...")
 
     try:
-        pdb.gimp_progress_init("Editing with Qwen...", None)
-
-        # Set the DashScope endpoint
+        dashscope.api_key = DASHSCOPE_API_KEY
         dashscope.base_http_api_url = DASHSCOPE_ENDPOINT
 
         # Get selection bounds
-        non_empty, x1, y1, x2, y2 = pdb.gimp_selection_bounds(image)
+        non_empty, x1, y1, x2, y2 = selection.get_bounds()
+        if not non_empty:
+            raise RuntimeError("Selection is empty")
         w, h = x2 - x1, y2 - y1
-        pdb.gimp_message("Debug Info: Placing result at coordinates ({}, {}).".format(x1, y1))
 
-        # Duplicate image
-        dup = pdb.gimp_image_duplicate(image)
-        layer = pdb.gimp_image_get_active_layer(dup)
+        # Duplicate image and isolate selection
+        dup_image = image.duplicate()
+        dup_layer = dup_image.get_active_layer()
 
-        # Ensure alpha
-        if not pdb.gimp_drawable_has_alpha(layer):
-            pdb.gimp_layer_add_alpha(layer)
+        if not dup_layer.has_alpha():
+            dup_layer.add_alpha()
 
-        # Apply selection as transparency (soft edges preserved!)
-        mask = pdb.gimp_layer_create_mask(layer, ADD_SELECTION_MASK)
-        pdb.gimp_layer_add_mask(layer, mask)
-        pdb.gimp_layer_remove_mask(layer, 0)  # Apply the mask (0 = MASK_APPLY)
+        # Apply selection as transparency
+        mask = dup_layer.create_mask(Gimp.AddMaskType.SELECTION_MASK)
+        dup_layer.add_mask(mask)
+        dup_layer.remove_mask(Gimp.MaskApplyMode.APPLY)
 
-        # Crop to selection bounds
-        pdb.gimp_image_crop(dup, w, h, x1, y1)
+        # Crop to selection
+        dup_image.crop(w, h, x1, y1)
 
-        # Export with alpha
-        temp_file = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
-        temp_path = temp_file.name
-        temp_file.close()
-        pdb.file_png_save_defaults(dup, layer, temp_path, temp_path)
+        # Export to temp PNG using the correct PDB call
+        temp_input = os.path.join(GLib.get_tmp_dir(), "gimp_qwen_input.png")
+        pdb = Gimp.get_pdb()
+        result = pdb.run_procedure(
+            "file-png-save",
+            [
+                Gimp.RunMode.NONINTERACTIVE,
+                dup_image,
+                dup_layer,
+                temp_input,
+                temp_input
+            ]
+        )
+        if result.index(0) != Gimp.PDBStatusType.SUCCESS:
+            raise RuntimeError("Failed to save temporary image")
 
-        # Read and encode image
-        with open(temp_path, 'rb') as f:
-            img_data = f.read()
-            img_b64 = base64.b64encode(img_data).decode('utf-8')
+        dup_image.delete()
 
-        os.unlink(temp_path)
-        pdb.gimp_image_delete(dup)
+        # Encode image
+        with open(temp_input, 'rb') as f:
+            img_b64 = base64.b64encode(f.read()).decode('utf-8')
+        os.unlink(temp_input)
 
-        # Prepare Qwen API request using DashScope format
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"image": "data:image/png;base64," + img_b64},
-                    {"text": prompt}
-                ]
-            }
-        ]
+        # Call Qwen API
+        messages = [{
+            "role": "user",
+            "content": [
+                {"image": "data:image/png;base64," + img_b64},
+                {"text": prompt}
+            ]
+        }]
 
-        # Call Qwen Image Edit API
         response = MultiModalConversation.call(
-            api_key=DASHSCOPE_API_KEY,
             model="qwen-image-edit",
             messages=messages,
-            stream=False,
-            watermark=False,
-            negative_prompt=""
+            api_key=DASHSCOPE_API_KEY
         )
 
-        # Check response status
         if response.status_code != 200:
-            pdb.gimp_message("❌ API Error: {}".format(response.message))
-            return
+            raise RuntimeError(f"API Error ({response.status_code}): {getattr(response, 'message', 'Unknown')}")
 
-        # ✅ Fixed: Extract result image from response with proper error handling
-        try:
-            # DashScope response structure (verified from official docs):
-            # response.output.choices[0].message.content[0]['image']
-            output_url = response.output.choices[0].message.content[0]['image']
-            
-            if not output_url:
-                pdb.gimp_message("❌ No image URL in API response")
-                return
+        output_url = response.output.choices[0].message.content[0]['image']
 
-        except (AttributeError, IndexError, KeyError, TypeError) as e:
-            pdb.gimp_message("❌ Failed to parse API response: {}".format(str(e)))
-            return
+        # Download result
+        with urlopen(output_url) as resp:
+            img_data = resp.read()
 
-        # ✅ Fixed: Download the image with Python 2/3 compatibility
-        try:
-            img_response = urlopen(output_url)
-            img_data = img_response.read()
-            
-            # Save to temporary file
-            temp_file2 = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
-            temp_path2 = temp_file2.name
-            temp_file2.write(img_data)
-            temp_file2.close()
+        temp_output = os.path.join(GLib.get_tmp_dir(), "gimp_qwen_output.png")
+        with open(temp_output, 'wb') as f:
+            f.write(img_data)
 
-        except Exception as e:
-            pdb.gimp_message("❌ Failed to download result image: {}".format(str(e)))
-            return
+        # Load result as new layer using the correct GIMP 3 function
+        result_layer = Gimp.file_load_layer(Gimp.RunMode.NONINTERACTIVE, image, temp_output)
+        if not result_layer:
+            raise RuntimeError("Failed to load result image")
 
-        # Load result into GIMP
-        result_layer = pdb.gimp_file_load_layer(image, temp_path2)
-        pdb.gimp_image_insert_layer(image, result_layer, None, 0)
-        pdb.gimp_item_set_name(result_layer, "Qwen Edit")
+        result_layer.set_name("Qwen Edit")
+        image.insert_layer(result_layer, None, 0)
+        result_layer.translate(x1, y1)
 
-        # Force a UI update before trying to move the layer
-        pdb.gimp_displays_flush()
+        if result_layer.get_width() != w or result_layer.get_height() != h:
+            result_layer.scale(w, h, False)
 
-        # Set the layer's final position
-        pdb.gimp_layer_translate(result_layer, x1, y1)
-
-        # Another flush for good measure
-        pdb.gimp_displays_flush()
-
-        # Scale if needed to match original selection
-        lw = pdb.gimp_drawable_width(result_layer)
-        lh = pdb.gimp_drawable_height(result_layer)
-        if lw != w or lh != h:
-            pdb.gimp_layer_scale(result_layer, w, h, False)
-
-        # Clean up
-        os.unlink(temp_path2)
-
-        pdb.gimp_message("✅ Edit complete!")
+        os.unlink(temp_output)
+        Gimp.message("✅ Qwen edit complete!")
 
     except Exception as e:
-        pdb.gimp_message("❌ Error: {}".format(str(e)))
+        Gimp.message(f"❌ Error: {str(e)}")
+        return procedure.new_return_values(Gimp.PDBStatusType.EXECUTION_ERROR, GLib.Error(str(e)))
+    finally:
+        Gimp.progress_end()
 
-register(
-    "python_fu_qwen_edit_selection",
-    "Edit Selection with Qwen",
-    "Edit selected area using Qwen Image Edit AI (supports soft edges)",
-    "You",
-    "You",
-    "2025",
-    "<Image>/Filters/Qwen/Edit Selection...",
-    "RGB*, GRAY*",
-    [(PF_STRING, "prompt", "Prompt:", "replace with a futuristic cityscape")],
-    [],
-    edit_selection
-)
+    return procedure.new_return_values(Gimp.PDBStatusType.SUCCESS, None)
 
-main()
+
+class QwenEditPlugin(Gimp.PlugIn):
+    def do_query_procedures(self):
+        return ['python-fu-qwen-edit-selection']
+
+    def do_create_procedure(self, name):
+        procedure = Gimp.Procedure.new(self, name, Gimp.PDBProcType.PLUGIN, qwen_edit_selection, None)
+
+        procedure.set_documentation(
+            "Edit selection using Qwen Image Edit AI",
+            "Sends selected region to Qwen API with prompt and replaces it with AI-generated result.",
+            name
+        )
+        procedure.set_menu_label("Edit Selection with Qwen...")
+        procedure.set_attribution("Your Name", "Your Name", "2025")
+        procedure.add_menu_path(["<Image>", "Filters", "Qwen"])
+
+        procedure.add_argument(
+            "image", GObject.ParamSpec.object("image", "Image", "Input image", Gimp.Image.__gtype__, GObject.ParamFlags.READWRITE)
+        )
+        procedure.add_argument(
+            "drawable", GObject.ParamSpec.object("drawable", "Drawable", "Input drawable (layer)", Gimp.Drawable.__gtype__, GObject.ParamFlags.READWRITE)
+        )
+        procedure.add_argument(
+            "prompt", GObject.ParamSpec.string("prompt", "Prompt", "Text prompt for editing", "replace with a futuristic cityscape", GObject.ParamFlags.READWRITE)
+        )
+
+        return procedure
+
+
+# Entry point
+Gimp.main(QwenEditPlugin.__gtype__, Gimp.main_version(), sys.modules[__name__])
