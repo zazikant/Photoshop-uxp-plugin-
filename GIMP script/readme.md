@@ -4,5 +4,5 @@
 
 whats working: 
 1. Outpainting: select Q mask and invert it to select outside of image. give prompt: "outpaint this image" it will outpaint it or else *upscale to canvas width*..
-2. Upscaling: select Q mask and dont invert it to select image. give prompt: "upscale  image, hi resolution" it will upscale it to canvas width..
+2. Upscaling: select Q mask and dont invert it to select image. give prompt: "upscale  image, hi resolution" it will upscale it to canvas width.. very important: press ctrl + z on gemini edit layer. it will expan the generated image to highest of resolution
 3. Similar Style Reference Image: Same selection as above with inverting it to outside of image. give prompt: "Fill this image coherently" will make similar style image.
