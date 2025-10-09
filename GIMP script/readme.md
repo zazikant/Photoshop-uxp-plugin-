@@ -5,9 +5,9 @@
 whats working: 
 1. Outpainting: select Q mask and invert it to select outside of image. give prompt: "outpaint this image" it will outpaint it or else *upscale to canvas width*..
 
-2. Upscaling: select Q mask and dont invert it to select image. give prompt: "upscale  image, hi resolution" it will upscale it to canvas width.. very important: press ctrl + shift + z on gemini edit layer. it will expan the generated image to highest of resolution
+2. Upscaling (place subject image in a white canvas that is 3 x bigger) select Q mask and dont invert it to select image. give prompt: "upscale  image, hi resolution" it will upscale it to canvas width.. very important: press ctrl + shift + z on gemini edit layer. it will expan the generated image to highest of resolution
 
-3: Inpaint + Upscaler: same as point 2 upscaling.. without inverting selection, just write your prompt without keywords like Upscale " futuristic city, cars " it will select subject and blend to this theme.  press Ctrl + shift+ z to get this beautiful inpainted auto Upscaled photo
+3: Inpaint + Upscaler (place subject image in a white canvas that is 3 x bigger): same as point 2 upscaling.. without inverting selection, just write your prompt without keywords like Upscale " futuristic city, cars " it will select subject and blend to this theme.  press Ctrl + shift+ z to get this beautiful inpainted auto Upscaled photo
 
 
 4. Similar Style Reference Image: Same selection as above with inverting it to outside of image. give prompt: "Fill this image coherently" will make similar style image.
