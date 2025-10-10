@@ -12,3 +12,8 @@ whats working:
 
 
 4. Similar Style Reference Image: Same selection as above with inverting it to outside of image. give prompt: "Fill this image coherently" will make similar style image.
+
+
+Shortcut:
+
+1. To view full scale of  gemini output image: click shift + s it will preview image. Then press ctrl + c and ctrl + shift + v to paste full scale output to a new window.  
