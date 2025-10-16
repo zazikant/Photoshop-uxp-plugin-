@@ -5,6 +5,9 @@
 # *Very Important* Rule: ONLY USE PNG FILES TO WORK WITH AND NOT JPEG. ALSO, ADD A "BOX BLUR" TO IMAGE TO GET CANNY LIKE UPSCALE OR INPAINT
 
 whats working: 
+
+When you want to place something with 2 images and a text prompt. In qwen or google nano banana, use this: " FOLLOW THE PROMPT" it will do as mentioned in prompt.
+
 1. Outpainting: select Q mask and invert it to select outside of image. give prompt: "outpaint this image" it will outpaint it or else *upscale to canvas width*..
 
 2. Upscaling (place subject image in a white canvas that is 3 x bigger): select Q mask and dont invert it to select image. give prompt: "upscale  image, hi resolution" it will upscale it to canvas width.. very important: press ctrl + shift + z on gemini edit layer. it will expan the generated image to highest of resolution
