@@ -10,7 +10,7 @@ When you want to place something with 2 images and a text prompt. In qwen or goo
 
 1. Outpainting: select Q mask and invert it to select outside of image. give prompt: "outpaint this image" it will outpaint it or else *upscale to canvas width*..
 
-for perfect out painting results: Create a canvas of let's say 1280 * 720 and in middle upload a photo. export to png with white background. go to nano banana and type: fill this image. 
+for perfect out painting results: Create a canvas of let's say 1280 * 720 and in middle upload a photo (with bit blur optional). export to png with white background. go to nano banana and type: fill this image. 
 
 in GIMP, just send entire image to nano banana with same prompt: fill this image/out paint this image 
 
