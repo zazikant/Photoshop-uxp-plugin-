@@ -1,3 +1,52 @@
+# GIMP AI scripts
+
+## kie.ai Grok Imagine plugins — GIMP 3.2 (current)
+
+Two GIMP 3 plug-ins using kie.ai's **Grok Imagine Image 2.0**:
+
+| File | Menu entry | What it does |
+|------|------------|--------------|
+| `kie_text_to_image.py` | Filters > AI Tools > Generate New Image with kie.ai (Grok)... | Text-to-image. The result opens in a **new image window**. |
+| `kie_image_edit.py` | Filters > AI Tools > Edit Selection with kie.ai (Grok)... | Sends your current **selection** + prompt; the result is inserted as a **new layer**. |
+
+### Install (GIMP 3.2)
+
+1. Open (create if missing) GIMP's user plug-ins folder:
+
+   ```
+   C:\Users\Asus\AppData\Roaming\GIMP\3.2\plug-ins
+   ```
+
+2. **Create 2 folders** inside it, one per plug-in. The folder name MUST match the `.py` file name exactly (case included) — GIMP ignores the plug-in otherwise:
+
+   ```
+   C:\Users\Asus\AppData\Roaming\GIMP\3.2\plug-ins\
+     kie_text_to_image\
+       kie_text_to_image.py
+     kie_image_edit\
+       kie_image_edit.py
+   ```
+
+3. FULLY quit GIMP (check Task Manager for `gimp*.exe` processes) and start it again. Both entries appear under **Filters > AI Tools**.
+
+### API key
+
+1. Create a key at <https://kie.ai/api-key> — never share or commit it.
+2. On first run, paste the key into the **API key** field of the plug-in dialog. It is saved locally to `C:\Users\Asus\.kie_api_key`, so you only enter it once.
+3. Alternatives: set the environment variable `KIE_API_KEY` (then restart GIMP), or write the key to `C:\Users\Asus\.kie_api_key` yourself.
+
+Requires GIMP 3.0+ (tested on GIMP 3.2.6). Uses only the Python standard library — no pip packages. Aspect ratios: `1:1, 16:9, 9:16, 4:3, 3:4`. A generation typically takes 10-90 seconds.
+
+### Troubleshooting
+
+- **Plug-in missing from the menu** — the folder name doesn't match the file name (case included), or GIMP wasn't fully restarted.
+- **"No API key"** — paste the key in the dialog, set `KIE_API_KEY`, or write it to `C:\Users\Asus\.kie_api_key`.
+- **Anything fails** — every step (and full tracebacks on errors) is logged to `C:\Users\Asus\.gimp_kie_debug.log`; check the newest lines.
+
+---
+
+## Old Gemini / Qwen scripts — GIMP 2.10
+
 # Only use 2.10.8 or 2.10.38 onwards version of GIMP
 # C:\Users\Asus\AppData\Roaming\GIMP\2.10\plug-ins Place python script here.
   ##First open notepad -> paste python code -> save as codename.py because you can see notepad in bottom right has "UTF 8" . save that note pad to above path. later you are free to update this same py file with vs code.
