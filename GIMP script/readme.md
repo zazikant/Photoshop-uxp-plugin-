@@ -35,7 +35,7 @@ Two GIMP 3 plug-ins using kie.ai's **Grok Imagine Image 2.0**:
 2. On first run, paste the key into the **API key** field of the plug-in dialog. It is saved locally to `C:\Users\Asus\.kie_api_key`, so you only enter it once.
 3. Alternatives: set the environment variable `KIE_API_KEY` (then restart GIMP), or write the key to `C:\Users\Asus\.kie_api_key` yourself.
 
-Requires GIMP 3.0+ (tested on GIMP 3.2.6). Uses only the Python standard library — no pip packages. Aspect ratios: `1:1, 16:9, 9:16, 4:3, 3:4`. A generation typically takes 10-90 seconds.
+Requires GIMP 3.0+ (tested on GIMP 3.2.6). Uses only the Python standard library — no pip packages. Aspect ratios: `1:1, 16:9, 9:16, 4:3, 3:4` — **Edit Selection** defaults to `auto`, which sends the ratio closest to your selection so the result lines up without extra pixels. A generation typically takes 10-90 seconds.
 
 ### Troubleshooting
 

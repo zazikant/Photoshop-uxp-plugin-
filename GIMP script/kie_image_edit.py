@@ -168,6 +168,21 @@ def _active_layer(image):
     return None
 
 
+SUPPORTED_RATIOS = ("1:1", "16:9", "9:16", "4:3", "3:4")
+
+
+def _closest_ratio(w, h):
+    """The supported ratio closest to w:h (kie.ai accepts a fixed set)."""
+    target = w / float(h)
+    best, best_diff = "1:1", None
+    for r in SUPPORTED_RATIOS:
+        a, b = r.split(":")
+        diff = abs((int(a) / int(b)) - target)
+        if best_diff is None or diff < best_diff:
+            best, best_diff = r, diff
+    return best
+
+
 def _export_selection_to_png(image, bounds):
     non_empty, x1, y1, x2, y2 = bounds
     w, h = x2 - x1, y2 - y1
@@ -210,6 +225,8 @@ def _insert_result_layer(image, result_path, x1, y1, w, h, name):
         layer = Gimp.file_load_layer(
             Gimp.RunMode.NONINTERACTIVE, image,
             Gio.File.new_for_path(result_path))
+        _log("result layer {}x{} vs selection {}x{}".format(
+            layer.get_width(), layer.get_height(), w, h))
         layer.set_name(name)
         image.insert_layer(layer, None, 0)
         layer.set_offsets(x1, y1)
@@ -297,8 +314,8 @@ class KieImageEdit(Gimp.PlugIn):
         )
         procedure.add_string_argument(
             "aspect_ratio", "Aspect ratio",
-            "Output aspect ratio: 1:1, 16:9, 9:16, 4:3, 3:4",
-            "1:1", GObject.ParamFlags.READWRITE,
+            "auto (match the selection), 1:1, 16:9, 9:16, 4:3, 3:4",
+            "auto", GObject.ParamFlags.READWRITE,
         )
         procedure.add_string_argument(
             "api_key", "API key",
@@ -344,7 +361,7 @@ class KieImageEdit(Gimp.PlugIn):
             # Fall through so the rest still runs with defaults/current config
 
         prompt       = (config.get_property("prompt") or "").strip()
-        aspect_ratio = (config.get_property("aspect_ratio") or "").strip() or "1:1"
+        aspect_ratio = (config.get_property("aspect_ratio") or "").strip() or "auto"
         api_key      = (config.get_property("api_key") or "").strip()
 
         _log("prompt={!r} aspect_ratio={!r} api_key={}".format(
@@ -386,6 +403,11 @@ class KieImageEdit(Gimp.PlugIn):
                 y2 = image.get_height()
             bounds = (non_empty, x1, y1, x2, y2)
             _log("selection bounds={!r}".format(bounds))
+
+            if aspect_ratio.lower() == "auto":
+                aspect_ratio = _closest_ratio(x2 - x1, y2 - y1)
+                _log("aspect ratio auto -> {} (selection {}x{})".format(
+                    aspect_ratio, x2 - x1, y2 - y1))
 
             Gimp.progress_init("kie.ai: exporting selection...")
             tmp_path, x1, y1, w, h = _export_selection_to_png(image, bounds)
