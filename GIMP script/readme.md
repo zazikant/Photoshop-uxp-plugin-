@@ -1,4 +1,4 @@
-# GIMP AI scripts (while using Kie script have aspect ratio configured to 1:1, 2:3, 3:2, 16:9, 9:16,  auto works.. in case you want to edit image by selecting all.. you need to mandatory choose as "auto" in script)
+# GIMP AI scripts (while using Kie script have aspect ratio configured to 1:1, 2:3, 3:2, 16:9, 9:16,  auto works.. in case you want to edit image by selecting all.. you need to mandatory choose as "auto" in pop up)
 
 ## kie.ai Grok Imagine plugins — GIMP 3.2 (current)
 
