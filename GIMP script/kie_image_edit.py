@@ -6,14 +6,18 @@
 # DEBUG build: every step is logged to ~/.gimp_kie_debug.log so failures
 # can be diagnosed even when GIMP swallows them.
 #
+# The generated result is inserted as a plain new layer on top of the
+# layer stack (no selection-derived layer mask / clipping), positioned
+# over the selection bounds.
+#
 # Install: copy into
 #   C:\Users\Asus\AppData\Roaming\GIMP\3.2\plug-ins\kie_image_edit\kie_image_edit.py
 # then FULLY quit GIMP (check Task Manager for gimp*.exe) and reopen.
 
 import base64
 import json
+import math
 import os
-import ssl
 import sys
 import tempfile
 import time
@@ -41,9 +45,6 @@ def _log(msg):
 
 
 _log("module kie_image_edit loaded (pid={})".format(os.getpid()))
-
-if hasattr(ssl, "_create_unverified_context"):
-    ssl._create_default_https_context = ssl._create_unverified_context
 
 
 def _read_key():
@@ -155,83 +156,97 @@ def _selection_bounds(image):
     return non_empty, x1, y1, x2, y2
 
 
-def _active_layer(image):
-    """Best-effort active layer (GIMP 3.2 has no get_active_layer)."""
-    for getter in ("get_selected_layers", "get_selected_drawables",
-                   "get_layers"):
-        try:
-            items = getattr(image, getter)()
-            if items:
-                return items[0]
-        except Exception:
-            pass
-    return None
-
-
-SUPPORTED_RATIOS = ("1:1", "16:9", "9:16", "4:3", "3:4")
-
-
-def _closest_ratio(w, h):
-    """The supported ratio closest to w:h (kie.ai accepts a fixed set)."""
-    target = w / float(h)
-    best, best_diff = "1:1", None
-    for r in SUPPORTED_RATIOS:
-        a, b = r.split(":")
-        diff = abs((int(a) / int(b)) - target)
-        if best_diff is None or diff < best_diff:
-            best, best_diff = r, diff
-    return best
+# KIE's published Grok Imagine Image 2.0 image-edit options.
+# Use "auto" for arbitrary selection shapes; let KIE choose the output ratio.
+SUPPORTED_RATIOS = ("auto", "1:1", "2:3", "3:2", "16:9", "9:16")
 
 
 def _export_selection_to_png(image, bounds):
+    """Export the visible composite with the Quick Mask selection as alpha."""
     non_empty, x1, y1, x2, y2 = bounds
     w, h = x2 - x1, y2 - y1
     if w <= 0 or h <= 0:
         raise RuntimeError("Invalid selection bounds")
 
     dup = image.duplicate()
-    layer = _active_layer(dup)
-    if layer is None:
-        dup.delete()
-        raise RuntimeError("Active layer not found")
-    if not layer.has_alpha():
-        layer.add_alpha()
-
-    if non_empty:
-        m = layer.create_mask(Gimp.AddMaskType.SELECTION)
-        layer.add_mask(m)
-        layer.remove_mask(Gimp.MaskApplyMode.APPLY)
-
-    dup.crop(w, h, x1, y1)
-
     tmp_path = os.path.join(
         tempfile.gettempdir(),
         "gimp_kie_edit_{}.png".format(os.getpid()))
+    try:
+        # Mask the merged visible composite, not just one layer. This keeps
+        # the Quick Mask's gray values as partial alpha in the uploaded PNG.
+        layer = dup.merge_visible_layers(Gimp.MergeType.CLIP_TO_IMAGE)
+        if layer is None:
+            raise RuntimeError("Could not merge visible layers for export")
+        if not layer.has_alpha():
+            layer.add_alpha()
 
-    from gi.repository import Gio
-    ok = Gimp.file_save(
-        Gimp.RunMode.NONINTERACTIVE, dup,
-        Gio.File.new_for_path(tmp_path))
-    dup.delete()
-    if not ok:
-        raise RuntimeError("Failed to write temporary PNG")
+        if non_empty:
+            mask = layer.create_mask(Gimp.AddMaskType.SELECTION)
+            layer.add_mask(mask)
+            layer.remove_mask(Gimp.MaskApplyMode.APPLY)
+
+        dup.crop(w, h, x1, y1)
+
+        from gi.repository import Gio
+        ok = Gimp.file_save(
+            Gimp.RunMode.NONINTERACTIVE, dup,
+            Gio.File.new_for_path(tmp_path))
+        if not ok:
+            raise RuntimeError("Failed to write temporary PNG")
+    finally:
+        dup.delete()
+
     return tmp_path, x1, y1, w, h
 
 
+def _fit_layer_to_bounds(layer, w, h):
+    """Fill w x h without stretching; center-crop only if ratios differ."""
+    src_w, src_h = layer.get_width(), layer.get_height()
+    if src_w <= 0 or src_h <= 0 or w <= 0 or h <= 0:
+        raise RuntimeError("Invalid result or selection dimensions")
+
+    # Scale uniformly to cover the target bounds, then crop to exact bounds.
+    factor = max(w / float(src_w), h / float(src_h))
+    scaled_w = max(w, int(math.ceil(src_w * factor)))
+    scaled_h = max(h, int(math.ceil(src_h * factor)))
+
+    # Scale at the origin, then position the finished layer later.
+    layer.set_offsets(0, 0)
+    if scaled_w != src_w or scaled_h != src_h:
+        if not layer.scale(scaled_w, scaled_h, False):
+            raise RuntimeError("Could not scale generated result layer")
+
+    crop_left = (scaled_w - w) // 2
+    crop_top = (scaled_h - h) // 2
+    if scaled_w != w or scaled_h != h:
+        if not layer.resize(w, h, -crop_left, -crop_top):
+            raise RuntimeError("Could not crop result to selection bounds")
+
+
 def _insert_result_layer(image, result_path, x1, y1, w, h, name):
+    """Insert the result as a plain new layer on top of the stack.
+
+    No selection-derived layer mask is applied: the full generated
+    result is pasted outside/above any clipping, positioned over the
+    original selection bounds.
+    """
     from gi.repository import Gio
     image.undo_group_start()
     try:
         layer = Gimp.file_load_layer(
             Gimp.RunMode.NONINTERACTIVE, image,
             Gio.File.new_for_path(result_path))
+        if layer is None:
+            raise RuntimeError("Could not load generated result layer")
         _log("result layer {}x{} vs selection {}x{}".format(
             layer.get_width(), layer.get_height(), w, h))
         layer.set_name(name)
         image.insert_layer(layer, None, 0)
+
+        # Match the selection rectangle without non-uniform stretching.
+        _fit_layer_to_bounds(layer, w, h)
         layer.set_offsets(x1, y1)
-        if layer.get_width() != w or layer.get_height() != h:
-            layer.scale(w, h, False)
     finally:
         image.undo_group_end()
     Gimp.displays_flush()
@@ -314,7 +329,7 @@ class KieImageEdit(Gimp.PlugIn):
         )
         procedure.add_string_argument(
             "aspect_ratio", "Aspect ratio",
-            "auto (match the selection), 1:1, 16:9, 9:16, 4:3, 3:4",
+            "auto (recommended), 1:1, 2:3, 3:2, 16:9, 9:16",
             "auto", GObject.ParamFlags.READWRITE,
         )
         procedure.add_string_argument(
@@ -383,6 +398,14 @@ class KieImageEdit(Gimp.PlugIn):
             return procedure.new_return_values(
                 Gimp.PDBStatusType.CALLING_ERROR, GLib.Error(msg))
 
+        aspect_ratio = aspect_ratio.lower()
+        if aspect_ratio not in SUPPORTED_RATIOS:
+            msg = ("Unsupported aspect ratio. Use: " +
+                   ", ".join(SUPPORTED_RATIOS))
+            Gimp.message(msg)
+            return procedure.new_return_values(
+                Gimp.PDBStatusType.CALLING_ERROR, GLib.Error(msg))
+
         _save_key(api_key)
 
         if not _image_alive(image):
@@ -404,10 +427,8 @@ class KieImageEdit(Gimp.PlugIn):
             bounds = (non_empty, x1, y1, x2, y2)
             _log("selection bounds={!r}".format(bounds))
 
-            if aspect_ratio.lower() == "auto":
-                aspect_ratio = _closest_ratio(x2 - x1, y2 - y1)
-                _log("aspect ratio auto -> {} (selection {}x{})".format(
-                    aspect_ratio, x2 - x1, y2 - y1))
+            _log("using KIE aspect ratio={!r} for selection {}x{}".format(
+                aspect_ratio, x2 - x1, y2 - y1))
 
             Gimp.progress_init("kie.ai: exporting selection...")
             tmp_path, x1, y1, w, h = _export_selection_to_png(image, bounds)
@@ -436,7 +457,8 @@ class KieImageEdit(Gimp.PlugIn):
             _log("downloaded to " + result_path)
 
             if _image_alive(image):
-                _log("image still valid; inserting as new layer...")
+                _log("image still valid; inserting as new layer "
+                     "(no selection mask, plain paste)...")
                 _insert_result_layer(
                     image, result_path, x1, y1, w, h,
                     "kie: " + prompt[:30])
