@@ -1,28 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 #
-# GIMP 3 plug-in: Generate New Image with kie.ai (GPT Image 2.5 Flare)  [HARDENED]
+# GIMP 3 plug-in: Generate New Image with kie.ai (GPT Image 2.5 Flare)
 #
-# Result opens in a NEW image window — no dependence on any image being
-# open when the plug-in runs.
+# Result opens in a NEW image window (same UX as the old Gemini script) —
+# no dependence on any image being open when the plug-in runs.
 #
 # Every step is logged to ~/.gimp_kie_debug.log.
 #
 # Install: copy into
 #   C:\Users\Asus\AppData\Roaming\GIMP\3.2\plug-ins\kie_text_to_image\kie_text_to_image.py
 # then FULLY quit GIMP (check Task Manager for gimp*.exe) and reopen.
-#
-# Hardening:
-#   - ASCII sanitizer: kie.ai responses (en-dash, smart quotes, emoji)
-#     are translated to pure ASCII so GIMP's latin-1 error display path
-#     cannot crash with UnicodeEncodeError and mask the real failure.
-#   - _normalize_key: strips surrounding whitespace, surrounding quotes,
-#     and a leading 'Bearer ' prefix the user may have pasted along
-#     with the actual token.
-#   - GLib.Error constructed via new_literal(quark, msg, 0).
-#   - Detailed HTTP logging: every request logs method, URL, status,
-#     body length; on HTTPError, the response body is captured into
-#     the log so the actual kie.ai error payload is visible.
 
 import json
 import os
@@ -31,7 +19,6 @@ import sys
 import tempfile
 import time
 import traceback
-import unicodedata
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 
@@ -39,16 +26,10 @@ import gi
 gi.require_version('Gimp', '3.0')
 from gi.repository import Gimp, GObject, GLib
 
-# ---------------------------------------------------------------------------
-# gpt-image-2-5-flare model identifier (kie.ai createTask sample)
-# ---------------------------------------------------------------------------
 KIE_MODEL = "gpt-image-2-5-flare-text-to-image"
-
 JOBS_BASE = "https://api.kie.ai/api/v1"
 KEY_FILE  = os.path.expanduser("~/.kie_api_key")
 LOG_FILE  = os.path.expanduser("~/.gimp_kie_debug.log")
-
-KIE_ERROR_QUARK = "kie-plugin-error"
 
 
 def _log(msg):
@@ -59,78 +40,25 @@ def _log(msg):
         pass
 
 
-_log("module kie_text_to_image (gpt-image-2-5-flare) loaded (pid={})".format(os.getpid()))
+_log("module kie_text_to_image loaded (pid={})".format(os.getpid()))
 
 if hasattr(ssl, "_create_unverified_context"):
     ssl._create_default_https_context = ssl._create_unverified_context
 
 
-def _ascii_safe(text):
-    """Coerce any string to pure ASCII safe for GIMP's latin-1 paths."""
-    if text is None:
-        return ""
-    if not isinstance(text, str):
-        try:
-            text = str(text)
-        except Exception:
-            return repr(text)
-    text = unicodedata.normalize("NFKC", text)
-    table = {
-        0x2010: "-",   0x2011: "-",   0x2012: "-",   0x2013: "-",
-        0x2014: "--",  0x2018: "'",   0x2019: "'",   0x201A: ",",
-        0x201C: '"',   0x201D: '"',   0x2026: "...", 0x00A0: " ",
-    }
-    text = text.translate(table)
-    out = []
-    for ch in text:
-        if ord(ch) < 128:
-            out.append(ch)
-        else:
-            out.append("[U+{:04X}]".format(ord(ch)))
-    return "".join(out)
-
-
-def _normalize_key(key):
-    """Strip whitespace, surrounding quotes, and any leading 'Bearer '."""
-    if not key:
-        return ""
-    key = key.strip().strip('"').strip("'").strip()
-    low = key.lower()
-    if low.startswith("bearer "):
-        key = key[len("bearer "):].lstrip()
-    elif low.startswith("bearer\t"):
-        key = key[len("bearer\t"):].lstrip()
-    return key
-
-
 def _read_key():
     key = os.environ.get("KIE_API_KEY", "").strip()
     if key:
-        return _normalize_key(key)
+        return key
     if os.path.isfile(KEY_FILE):
         with open(KEY_FILE, "r", encoding="utf-8") as f:
-            return _normalize_key(f.read().strip())
+            return f.read().strip()
     return ""
 
 
 def _save_key(key):
-    key = _normalize_key(key)
     with open(KEY_FILE, "w", encoding="utf-8") as f:
-        f.write(key + "\n")
-
-
-def _make_glib_error(message):
-    """Build a GLib.Error the correct way."""
-    safe_msg = _ascii_safe(message)
-    try:
-        quark = GLib.quark_from_string(KIE_ERROR_QUARK)
-        return GLib.Error.new_literal(quark, safe_msg, 0)
-    except Exception as e:
-        _log("GLib.Error.new_literal failed ({}); falling back".format(repr(e)))
-        try:
-            return GLib.Error(safe_msg)
-        except Exception:
-            return GLib.Error()
+        f.write(key.strip() + "\n")
 
 
 def _http_post_json(url, payload, api_key):
@@ -144,22 +72,8 @@ def _http_post_json(url, payload, api_key):
         },
         method="POST",
     )
-    _log("POST {} (auth_len={}, body_len={})".format(
-        url, len(api_key), len(body)))
-    try:
-        with urlopen(req, timeout=120) as resp:
-            raw = resp.read()
-            _log("POST {} -> HTTP {} ({} bytes)".format(
-                url, resp.status, len(raw)))
-            return json.loads(raw)
-    except HTTPError as e:
-        try:
-            err_body = e.read().decode("utf-8", errors="replace")
-        except Exception:
-            err_body = "<unreadable>"
-        _log("POST {} -> HTTPError {} body={}".format(
-            url, e.code, err_body[:1000]))
-        raise
+    with urlopen(req, timeout=120) as resp:
+        return json.loads(resp.read())
 
 
 def _http_get_json(url, api_key):
@@ -168,47 +82,18 @@ def _http_get_json(url, api_key):
         headers={"Authorization": "Bearer " + api_key},
         method="GET",
     )
-    _log("GET {}".format(url))
-    try:
-        with urlopen(req, timeout=60) as resp:
-            raw = resp.read()
-            _log("GET {} -> HTTP {} ({} bytes)".format(
-                url, resp.status, len(raw)))
-            return json.loads(raw)
-    except HTTPError as e:
-        try:
-            err_body = e.read().decode("utf-8", errors="replace")
-        except Exception:
-            err_body = "<unreadable>"
-        _log("GET {} -> HTTPError {} body={}".format(
-            url, e.code, err_body[:1000]))
-        raise
+    with urlopen(req, timeout=60) as resp:
+        return json.loads(resp.read())
 
 
-def submit_text_to_image(api_key, prompt, aspect_ratio,
-                         resolution="1K", background="transparent"):
-    """Submit a gpt-image-2-5-flare-text-to-image task.
-
-    Per the kie.ai createTask sample, the input object uses:
-      - prompt         (str)
-      - aspect_ratio   (str)         <- "3:2", "auto", "1:1", ...
-      - resolution     (str)         <- "1K", "2K", "4K"
-      - background     (str)         <- "transparent" or "opaque"
-    No input_urls field for text-to-image.
-    """
+def submit_text_to_image(api_key, prompt, aspect_ratio):
     payload = {
         "model": KIE_MODEL,
-        "input": {
-            "prompt": prompt,
-            "aspect_ratio": aspect_ratio,
-            "resolution": resolution,
-            "background": background,
-        },
+        "input": {"prompt": prompt, "aspect_ratio": aspect_ratio},
     }
     data = _http_post_json(JOBS_BASE + "/jobs/createTask", payload, api_key)
     if data.get("code") != 200:
-        raise RuntimeError("createTask failed: " + json.dumps(
-            data, ensure_ascii=True))
+        raise RuntimeError("createTask failed: " + str(data))
     return data["data"]["taskId"]
 
 
@@ -224,8 +109,7 @@ def poll_task(api_key, task_id, *, timeout_s=600):
         if state == "fail":
             raise RuntimeError(
                 "kie.ai task failed: code={} msg={}".format(
-                    data.get("failCode"), json.dumps(
-                        data.get("failMsg"), ensure_ascii=True)))
+                    data.get("failCode"), data.get("failMsg")))
         time.sleep(delay)
         delay = min(delay * 1.5, 10.0)
     raise TimeoutError("kie.ai task did not complete in {} s".format(timeout_s))
@@ -235,16 +119,6 @@ def download_to(url, dest):
     with urlopen(url, timeout=120) as r:
         with open(dest, "wb") as f:
             f.write(r.read())
-
-
-# KIE's published gpt-image-2-5-flare aspect ratios.
-SUPPORTED_RATIOS = ("auto", "1:1", "2:3", "3:2", "16:9", "9:16", "4:3", "3:4")
-
-# gpt-image-2-5-flare supported resolutions.
-SUPPORTED_RESOLUTIONS = ("1K", "2K", "4K")
-
-# gpt-image-2-5-flare supported background modes.
-SUPPORTED_BACKGROUNDS = ("transparent", "opaque", "white", "black")
 
 
 def _open_in_new_window(png_path):
@@ -305,43 +179,32 @@ class KieTextToImage(Gimp.PlugIn):
 
         procedure.set_documentation(
             "Generate a new image with kie.ai GPT Image 2.5 Flare text-to-image.",
-            "Dialog for prompt, aspect ratio, resolution, background, and "
-            "API key. The result opens in a new image window. Works with "
-            "or without an image open.",
+            "Dialog for prompt, aspect ratio and API key. The result opens "
+            "in a new image window. Works with or without an image open.",
             name,
         )
         procedure.set_attribution("Kie GIMP Plugin", "Kie GIMP Plugin", "2026")
 
         procedure.add_string_argument(
             "prompt", "Prompt", "Describe the image to generate",
-            "A cinematic night city poster with neon reflections on a rainy street.",
+            "a serene mountain landscape at sunset",
             GObject.ParamFlags.READWRITE,
         )
         procedure.add_string_argument(
             "aspect_ratio", "Aspect ratio",
-            "auto, 1:1, 2:3, 3:2, 16:9, 9:16, 4:3, 3:4",
-            "3:2", GObject.ParamFlags.READWRITE,
-        )
-        procedure.add_string_argument(
-            "resolution", "Resolution",
-            "Output resolution: 1K, 2K, or 4K",
-            "1K", GObject.ParamFlags.READWRITE,
-        )
-        procedure.add_string_argument(
-            "background", "Background",
-            "Background mode: transparent, opaque, white, or black",
-            "transparent", GObject.ParamFlags.READWRITE,
+            "Output aspect ratio: 1:1, 16:9, 9:16, 4:3, 3:4",
+            "1:1", GObject.ParamFlags.READWRITE,
         )
         procedure.add_string_argument(
             "api_key", "API key",
-            "kie.ai API key (no 'Bearer ' prefix). Saved to ~/.kie_api_key after first run.",
+            "kie.ai API key. Saved to ~/.kie_api_key after first run.",
             _read_key(),
             GObject.ParamFlags.READWRITE,
         )
         return procedure
 
     def run(self, procedure, run_mode, image, drawables, config, run_data):
-        _log("run() entered (flare t2i), run_mode={!r}".format(run_mode))
+        _log("run() entered, run_mode={!r}".format(run_mode))
 
         try:
             if run_mode == Gimp.RunMode.INTERACTIVE:
@@ -359,9 +222,8 @@ class KieTextToImage(Gimp.PlugIn):
                 except Exception as e:
                     _log("window_set_transient failed (non-fatal): " + repr(e))
 
-                _log("filling dialog with prompt/aspect_ratio/resolution/background/api_key...")
-                dialog.fill(["prompt", "aspect_ratio", "resolution",
-                             "background", "api_key"])
+                _log("filling dialog with prompt/aspect_ratio/api_key...")
+                dialog.fill(["prompt", "aspect_ratio", "api_key"])
 
                 _log("showing dialog (dialog.run())...")
                 ok = dialog.run()
@@ -374,72 +236,38 @@ class KieTextToImage(Gimp.PlugIn):
             _log("DIALOG FAILED with exception:\n" + traceback.format_exc())
 
         prompt       = (config.get_property("prompt") or "").strip()
-        aspect_ratio = (config.get_property("aspect_ratio") or "").strip() or "3:2"
-        resolution   = (config.get_property("resolution") or "").strip() or "1K"
-        background   = (config.get_property("background") or "").strip() or "transparent"
-        api_key_raw  = (config.get_property("api_key") or "").strip()
-        api_key      = _normalize_key(api_key_raw) or _read_key()
+        aspect_ratio = (config.get_property("aspect_ratio") or "").strip() or "1:1"
+        api_key      = (config.get_property("api_key") or "").strip()
 
-        _log("prompt={!r} aspect_ratio={!r} resolution={!r} background={!r} "
-             "api_key_len={} (raw_len={})".format(
-                 prompt, aspect_ratio, resolution, background,
-                 len(api_key), len(api_key_raw)))
+        _log("prompt={!r} aspect_ratio={!r} api_key={}".format(
+            prompt, aspect_ratio, "(set)" if api_key else "(empty)"))
 
         if not api_key:
+            api_key = _read_key()
+        if not api_key:
             msg = ("No API key. Paste your kie.ai key into the 'API key' "
-                   "field of the dialog and press OK. (Do NOT include the "
-                   "'Bearer ' prefix - the plugin adds it automatically.)")
-            Gimp.message(_ascii_safe(msg))
+                   "field of the dialog and press OK.")
+            Gimp.message(msg)
             return procedure.new_return_values(
-                Gimp.PDBStatusType.CALLING_ERROR, _make_glib_error(msg))
+                Gimp.PDBStatusType.CALLING_ERROR, GLib.Error(msg))
 
         if not prompt:
             msg = "Prompt is empty. Describe the image you want."
-            Gimp.message(_ascii_safe(msg))
+            Gimp.message(msg)
             return procedure.new_return_values(
-                Gimp.PDBStatusType.CALLING_ERROR, _make_glib_error(msg))
+                Gimp.PDBStatusType.CALLING_ERROR, GLib.Error(msg))
 
-        aspect_ratio = aspect_ratio.lower()
-        if aspect_ratio not in SUPPORTED_RATIOS:
-            msg = ("Unsupported aspect ratio. Use: " +
-                   ", ".join(SUPPORTED_RATIOS))
-            Gimp.message(_ascii_safe(msg))
-            return procedure.new_return_values(
-                Gimp.PDBStatusType.CALLING_ERROR, _make_glib_error(msg))
-
-        resolution = resolution.upper()
-        if resolution not in SUPPORTED_RESOLUTIONS:
-            msg = ("Unsupported resolution. Use: " +
-                   ", ".join(SUPPORTED_RESOLUTIONS))
-            Gimp.message(_ascii_safe(msg))
-            return procedure.new_return_values(
-                Gimp.PDBStatusType.CALLING_ERROR, _make_glib_error(msg))
-
-        background = background.lower()
-        if background not in SUPPORTED_BACKGROUNDS:
-            msg = ("Unsupported background. Use: " +
-                   ", ".join(SUPPORTED_BACKGROUNDS))
-            Gimp.message(_ascii_safe(msg))
-            return procedure.new_return_values(
-                Gimp.PDBStatusType.CALLING_ERROR, _make_glib_error(msg))
-
-        if api_key != api_key_raw and api_key_raw:
-            _save_key(api_key)
-            _log("normalized api_key (stripped 'Bearer ' prefix) and saved")
-        else:
-            _save_key(api_key)
+        _save_key(api_key)
 
         result_path = None
         shown = False
         try:
             Gimp.progress_init("kie.ai: submitting prompt...")
-            _log("submitting task (flare t2i)...")
-            task_id = submit_text_to_image(
-                api_key, prompt, aspect_ratio,
-                resolution=resolution, background=background)
+            _log("submitting task...")
+            task_id = submit_text_to_image(api_key, prompt, aspect_ratio)
             _log("task_id=" + str(task_id))
 
-            Gimp.progress_init("kie.ai: generating (flare)...")
+            Gimp.progress_init("kie.ai: generating...")
             result = poll_task(api_key, task_id)
             urls = result.get("resultUrls") or []
             _log("resultUrls count={}".format(len(urls)))
@@ -458,30 +286,25 @@ class KieTextToImage(Gimp.PlugIn):
 
             if shown:
                 _log("DONE (opened in new window)")
-                Gimp.message(_ascii_safe(
-                    "[OK] kie.ai GPT Image 2.5 Flare text-to-image complete "
-                    "(opened in a new window)."))
+                Gimp.message("✅ kie.ai GPT Image 2.5 Flare text-to-image complete "
+                             "(opened in a new window).")
             else:
-                Gimp.message(_ascii_safe(
-                    "[OK] Generated, but could not open a display. "
-                    "Image saved at: " + result_path))
+                Gimp.message(
+                    "✅ Generated, but could not open a display. "
+                    "Image saved at: " + result_path)
         except (URLError, HTTPError, KeyError, RuntimeError, TimeoutError,
                 GLib.Error) as e:
             _log("FAILED: " + repr(e))
-            err_text = _ascii_safe(str(e) or repr(e))
-            msg = "[ERROR] kie.ai GPT Image 2.5 Flare text-to-image failed: " + err_text
-            _log("user-facing error: " + msg)
+            msg = "❌ kie.ai GPT Image 2.5 Flare text-to-image failed: " + str(e)
             Gimp.message(msg)
             return procedure.new_return_values(
-                Gimp.PDBStatusType.EXECUTION_ERROR, _make_glib_error(msg))
+                Gimp.PDBStatusType.EXECUTION_ERROR, GLib.Error(msg))
         except Exception as e:
             _log("UNEXPECTED FAILURE:\n" + traceback.format_exc())
-            err_text = _ascii_safe(repr(e))
-            msg = "[ERROR] kie.ai GPT Image 2.5 Flare text-to-image failed (unexpected): " + err_text
-            _log("user-facing error: " + msg)
+            msg = "❌ kie.ai GPT Image 2.5 Flare text-to-image failed (unexpected): " + repr(e)
             Gimp.message(msg)
             return procedure.new_return_values(
-                Gimp.PDBStatusType.EXECUTION_ERROR, _make_glib_error(msg))
+                Gimp.PDBStatusType.EXECUTION_ERROR, GLib.Error(msg))
         finally:
             if result_path and shown:
                 try:
