@@ -19,7 +19,6 @@ import sys
 import tempfile
 import time
 import traceback
-import unicodedata
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 
@@ -27,20 +26,10 @@ import gi
 gi.require_version('Gimp', '3.0')
 from gi.repository import Gimp, GObject, GLib
 
-# ---------------------------------------------------------------------------
-# nano-banana-2 model identifier (replaces grok-imagine-image-2-0/text-to-image)
-# ---------------------------------------------------------------------------
 KIE_MODEL = "nano-banana-2"
-
 JOBS_BASE = "https://api.kie.ai/api/v1"
 KEY_FILE  = os.path.expanduser("~/.kie_api_key")
 LOG_FILE  = os.path.expanduser("~/.gimp_kie_debug.log")
-
-# GIMP error display paths use latin-1 in some legacy interop layers,
-# which means any non-ASCII char (emoji, en-dash, smart quotes, etc.) in
-# an error message throws UnicodeEncodeError and masks the real failure.
-# Always sanitize text before it goes into Gimp.message() / GLib.Error().
-KIE_ERROR_QUARK = "kie-plugin-error"
 
 
 def _log(msg):
@@ -57,100 +46,19 @@ if hasattr(ssl, "_create_unverified_context"):
     ssl._create_default_https_context = ssl._create_unverified_context
 
 
-def _ascii_safe(text):
-    """Coerce any string to pure ASCII safe for GIMP's latin-1 paths.
-
-    Strategy:
-      1. Replace common Unicode punctuation with ASCII equivalents
-         (en-dash -> -, em-dash -> --, smart quotes -> ', curly -> ").
-      2. Strip remaining non-ASCII chars (e.g. emoji) but keep their
-         names so the message stays useful: '[U+274C]'.
-    """
-    if text is None:
-        return ""
-    if not isinstance(text, str):
-        try:
-            text = str(text)
-        except Exception:
-            return repr(text)
-    # Normalize Unicode first (NFKC collapses compat forms).
-    text = unicodedata.normalize("NFKC", text)
-    # Translate the most common offenders into ASCII equivalents.
-    table = {
-        0x2010: "-",   # hyphen
-        0x2011: "-",   # non-breaking hyphen
-        0x2012: "-",   # figure dash
-        0x2013: "-",   # en dash
-        0x2014: "--",  # em dash
-        0x2018: "'",   # left single quote
-        0x2019: "'",   # right single quote
-        0x201A: ",",   # single low-9 quote
-        0x201C: '"',   # left double quote
-        0x201D: '"',   # right double quote
-        0x2026: "...", # ellipsis
-        0x00A0: " ",   # no-break space
-    }
-    text = text.translate(table)
-    # Anything still non-ASCII -> replace with [U+XXXX] placeholder.
-    out = []
-    for ch in text:
-        if ord(ch) < 128:
-            out.append(ch)
-        else:
-            out.append("[U+{:04X}]".format(ord(ch)))
-    return "".join(out)
-
-
 def _read_key():
     key = os.environ.get("KIE_API_KEY", "").strip()
     if key:
-        return _normalize_key(key)
+        return key
     if os.path.isfile(KEY_FILE):
         with open(KEY_FILE, "r", encoding="utf-8") as f:
-            return _normalize_key(f.read().strip())
+            return f.read().strip()
     return ""
 
 
-def _normalize_key(key):
-    """Strip whitespace, surrounding quotes, and any leading 'Bearer '
-    prefix the user may have pasted along with the actual token."""
-    if not key:
-        return ""
-    key = key.strip().strip('"').strip("'").strip()
-    # Case-insensitive strip of leading "Bearer " (also covers variants
-    # like "bearer  " or "BEARER " with extra whitespace).
-    low = key.lower()
-    if low.startswith("bearer "):
-        key = key[len("bearer "):].lstrip()
-    elif low.startswith("bearer\t"):
-        key = key[len("bearer\t"):].lstrip()
-    return key
-
-
 def _save_key(key):
-    key = _normalize_key(key)
     with open(KEY_FILE, "w", encoding="utf-8") as f:
-        f.write(key + "\n")
-
-
-def _make_glib_error(message):
-    """Build a GLib.Error the correct way (PyGObject's positional
-    string ctor is unreliable across versions). The error message is
-    ASCII-sanitized to avoid GIMP's latin-1 display path crashing on
-    emoji / smart punctuation from upstream API responses."""
-    safe_msg = _ascii_safe(message)
-    try:
-        quark = GLib.quark_from_string(KIE_ERROR_QUARK)
-        return GLib.Error.new_literal(quark, safe_msg, 0)
-    except Exception as e:
-        _log("GLib.Error.new_literal failed ({}); falling back to "
-             "GLib.Error(safe_msg)".format(repr(e)))
-        try:
-            return GLib.Error(safe_msg)
-        except Exception:
-            # Last-ditch: empty error object. Don't let GLib.Error
-            # construction itself raise.
-            return GLib.Error()
+        f.write(key.strip() + "\n")
 
 
 def _http_post_json(url, payload, api_key):
@@ -164,23 +72,8 @@ def _http_post_json(url, payload, api_key):
         },
         method="POST",
     )
-    _log("POST {} (auth_len={}, body_len={})".format(
-        url, len(api_key), len(body)))
-    try:
-        with urlopen(req, timeout=120) as resp:
-            raw = resp.read()
-            _log("POST {} -> HTTP {} ({} bytes)".format(
-                url, resp.status, len(raw)))
-            return json.loads(raw)
-    except HTTPError as e:
-        # Re-read body so 401 Unauthorized payloads are visible in the log.
-        try:
-            err_body = e.read().decode("utf-8", errors="replace")
-        except Exception:
-            err_body = "<unreadable>"
-        _log("POST {} -> HTTPError {} body={}".format(
-            url, e.code, err_body[:1000]))
-        raise
+    with urlopen(req, timeout=120) as resp:
+        return json.loads(resp.read())
 
 
 def _http_get_json(url, api_key):
@@ -189,49 +82,18 @@ def _http_get_json(url, api_key):
         headers={"Authorization": "Bearer " + api_key},
         method="GET",
     )
-    _log("GET {}".format(url))
-    try:
-        with urlopen(req, timeout=60) as resp:
-            raw = resp.read()
-            _log("GET {} -> HTTP {} ({} bytes)".format(
-                url, resp.status, len(raw)))
-            return json.loads(raw)
-    except HTTPError as e:
-        try:
-            err_body = e.read().decode("utf-8", errors="replace")
-        except Exception:
-            err_body = "<unreadable>"
-        _log("GET {} -> HTTPError {} body={}".format(
-            url, e.code, err_body[:1000]))
-        raise
+    with urlopen(req, timeout=60) as resp:
+        return json.loads(resp.read())
 
 
-def submit_text_to_image(api_key, prompt, aspect_ratio,
-                         resolution="1K", output_format="png"):
-    """Submit a nano-banana-2 text-to-image task.
-
-    Per the nano-banana-2 schema (see kie.ai createTask sample), the
-    input object uses:
-      - prompt         (str)
-      - image_input    (list[str])   <- empty list for text-to-image
-      - aspect_ratio   (str)
-      - resolution     (str)         <- "1K", "2K", "4K"
-      - output_format  (str)         <- "png", "jpg", "webp"
-    """
+def submit_text_to_image(api_key, prompt, aspect_ratio):
     payload = {
         "model": KIE_MODEL,
-        "input": {
-            "prompt": prompt,
-            "image_input": [],
-            "aspect_ratio": aspect_ratio,
-            "resolution": resolution,
-            "output_format": output_format,
-        },
+        "input": {"prompt": prompt, "aspect_ratio": aspect_ratio},
     }
     data = _http_post_json(JOBS_BASE + "/jobs/createTask", payload, api_key)
     if data.get("code") != 200:
-        raise RuntimeError("createTask failed: " + json.dumps(
-            data, ensure_ascii=True))
+        raise RuntimeError("createTask failed: " + str(data))
     return data["data"]["taskId"]
 
 
@@ -247,8 +109,7 @@ def poll_task(api_key, task_id, *, timeout_s=600):
         if state == "fail":
             raise RuntimeError(
                 "kie.ai task failed: code={} msg={}".format(
-                    data.get("failCode"), json.dumps(
-                        data.get("failMsg"), ensure_ascii=True)))
+                    data.get("failCode"), data.get("failMsg")))
         time.sleep(delay)
         delay = min(delay * 1.5, 10.0)
     raise TimeoutError("kie.ai task did not complete in {} s".format(timeout_s))
@@ -258,16 +119,6 @@ def download_to(url, dest):
     with urlopen(url, timeout=120) as r:
         with open(dest, "wb") as f:
             f.write(r.read())
-
-
-# KIE's published Nano Banana 2 options.
-SUPPORTED_RATIOS = ("auto", "1:1", "2:3", "3:2", "16:9", "9:16")
-
-# nano-banana-2 supports 1K / 2K / 4K output resolutions.
-SUPPORTED_RESOLUTIONS = ("1K", "2K", "4K")
-
-# nano-banana-2 supported output formats.
-SUPPORTED_OUTPUT_FORMATS = ("png", "jpg", "jpeg", "webp")
 
 
 def _open_in_new_window(png_path):
@@ -327,10 +178,9 @@ class KieTextToImage(Gimp.PlugIn):
         procedure.add_menu_path('<Image>/Filters/AI Tools/')
 
         procedure.set_documentation(
-            "Generate a new image with kie.ai Nano Banana 2.",
-            "Dialog for prompt, aspect ratio, resolution, output format, "
-            "and API key. The result opens in a new image window. "
-            "Works with or without an image open.",
+            "Generate a new image with kie.ai Nano Banana 2 text-to-image.",
+            "Dialog for prompt, aspect ratio and API key. The result opens "
+            "in a new image window. Works with or without an image open.",
             name,
         )
         procedure.set_attribution("Kie GIMP Plugin", "Kie GIMP Plugin", "2026")
@@ -342,22 +192,12 @@ class KieTextToImage(Gimp.PlugIn):
         )
         procedure.add_string_argument(
             "aspect_ratio", "Aspect ratio",
-            "auto, 1:1, 2:3, 3:2, 16:9, 9:16",
-            "auto", GObject.ParamFlags.READWRITE,
-        )
-        procedure.add_string_argument(
-            "resolution", "Resolution",
-            "Output resolution: 1K, 2K, or 4K",
-            "1K", GObject.ParamFlags.READWRITE,
-        )
-        procedure.add_string_argument(
-            "output_format", "Output format",
-            "Output file format: png, jpg, jpeg, or webp",
-            "png", GObject.ParamFlags.READWRITE,
+            "Output aspect ratio: auto, 1:1, 2:3, 3:2, 16:9, 9:16",
+            "1:1", GObject.ParamFlags.READWRITE,
         )
         procedure.add_string_argument(
             "api_key", "API key",
-            "kie.ai API key (no 'Bearer ' prefix). Saved to ~/.kie_api_key after first run.",
+            "kie.ai API key. Saved to ~/.kie_api_key after first run.",
             _read_key(),
             GObject.ParamFlags.READWRITE,
         )
@@ -382,9 +222,8 @@ class KieTextToImage(Gimp.PlugIn):
                 except Exception as e:
                     _log("window_set_transient failed (non-fatal): " + repr(e))
 
-                _log("filling dialog with prompt/aspect_ratio/resolution/output_format/api_key...")
-                dialog.fill(["prompt", "aspect_ratio", "resolution",
-                             "output_format", "api_key"])
+                _log("filling dialog with prompt/aspect_ratio/api_key...")
+                dialog.fill(["prompt", "aspect_ratio", "api_key"])
 
                 _log("showing dialog (dialog.run())...")
                 ok = dialog.run()
@@ -396,74 +235,39 @@ class KieTextToImage(Gimp.PlugIn):
         except Exception:
             _log("DIALOG FAILED with exception:\n" + traceback.format_exc())
 
-        prompt        = (config.get_property("prompt") or "").strip()
-        aspect_ratio  = (config.get_property("aspect_ratio") or "").strip() or "auto"
-        resolution    = (config.get_property("resolution") or "").strip() or "1K"
-        output_format = (config.get_property("output_format") or "").strip() or "png"
-        api_key_raw   = (config.get_property("api_key") or "").strip()
-        api_key       = _normalize_key(api_key_raw) or _read_key()
+        prompt       = (config.get_property("prompt") or "").strip()
+        aspect_ratio = (config.get_property("aspect_ratio") or "").strip() or "1:1"
+        api_key      = (config.get_property("api_key") or "").strip()
 
-        _log("prompt={!r} aspect_ratio={!r} resolution={!r} output_format={!r} "
-             "api_key_len={} (raw_len={})".format(
-                 prompt, aspect_ratio, resolution, output_format,
-                 len(api_key), len(api_key_raw)))
+        _log("prompt={!r} aspect_ratio={!r} api_key={}".format(
+            prompt, aspect_ratio, "(set)" if api_key else "(empty)"))
 
         if not api_key:
+            api_key = _read_key()
+        if not api_key:
             msg = ("No API key. Paste your kie.ai key into the 'API key' "
-                   "field of the dialog and press OK. (Do NOT include the "
-                   "'Bearer ' prefix - the plugin adds it automatically.)")
-            Gimp.message(_ascii_safe(msg))
+                   "field of the dialog and press OK.")
+            Gimp.message(msg)
             return procedure.new_return_values(
-                Gimp.PDBStatusType.CALLING_ERROR, _make_glib_error(msg))
-
-        # Save the normalized key so future runs skip the 'Bearer ' issue.
-        if api_key != api_key_raw and api_key_raw:
-            _save_key(api_key)
-            _log("normalized api_key (stripped 'Bearer ' prefix) and saved")
-        else:
-            _save_key(api_key)
+                Gimp.PDBStatusType.CALLING_ERROR, GLib.Error(msg))
 
         if not prompt:
             msg = "Prompt is empty. Describe the image you want."
-            Gimp.message(_ascii_safe(msg))
+            Gimp.message(msg)
             return procedure.new_return_values(
-                Gimp.PDBStatusType.CALLING_ERROR, _make_glib_error(msg))
+                Gimp.PDBStatusType.CALLING_ERROR, GLib.Error(msg))
 
-        aspect_ratio = aspect_ratio.lower()
-        if aspect_ratio not in SUPPORTED_RATIOS:
-            msg = ("Unsupported aspect ratio. Use: " +
-                   ", ".join(SUPPORTED_RATIOS))
-            Gimp.message(_ascii_safe(msg))
-            return procedure.new_return_values(
-                Gimp.PDBStatusType.CALLING_ERROR, _make_glib_error(msg))
-
-        resolution = resolution.upper()
-        if resolution not in SUPPORTED_RESOLUTIONS:
-            msg = ("Unsupported resolution. Use: " +
-                   ", ".join(SUPPORTED_RESOLUTIONS))
-            Gimp.message(_ascii_safe(msg))
-            return procedure.new_return_values(
-                Gimp.PDBStatusType.CALLING_ERROR, _make_glib_error(msg))
-
-        output_format = output_format.lower()
-        if output_format not in SUPPORTED_OUTPUT_FORMATS:
-            msg = ("Unsupported output format. Use: " +
-                   ", ".join(SUPPORTED_OUTPUT_FORMATS))
-            Gimp.message(_ascii_safe(msg))
-            return procedure.new_return_values(
-                Gimp.PDBStatusType.CALLING_ERROR, _make_glib_error(msg))
+        _save_key(api_key)
 
         result_path = None
         shown = False
         try:
             Gimp.progress_init("kie.ai: submitting prompt...")
-            _log("submitting task (nano-banana-2)...")
-            task_id = submit_text_to_image(
-                api_key, prompt, aspect_ratio,
-                resolution=resolution, output_format=output_format)
+            _log("submitting task...")
+            task_id = submit_text_to_image(api_key, prompt, aspect_ratio)
             _log("task_id=" + str(task_id))
 
-            Gimp.progress_init("kie.ai: generating (nano-banana-2)...")
+            Gimp.progress_init("kie.ai: generating...")
             result = poll_task(api_key, task_id)
             urls = result.get("resultUrls") or []
             _log("resultUrls count={}".format(len(urls)))
@@ -482,32 +286,25 @@ class KieTextToImage(Gimp.PlugIn):
 
             if shown:
                 _log("DONE (opened in new window)")
-                Gimp.message(_ascii_safe(
-                    "[OK] kie.ai Nano Banana 2 text-to-image complete "
-                    "(opened in a new window)."))
+                Gimp.message("✅ kie.ai Nano Banana 2 text-to-image complete "
+                             "(opened in a new window).")
             else:
-                Gimp.message(_ascii_safe(
-                    "[OK] Generated, but could not open a display. "
-                    "Image saved at: " + result_path))
+                Gimp.message(
+                    "✅ Generated, but could not open a display. "
+                    "Image saved at: " + result_path)
         except (URLError, HTTPError, KeyError, RuntimeError, TimeoutError,
                 GLib.Error) as e:
             _log("FAILED: " + repr(e))
-            # Build a clean ASCII error string. We do NOT use the [OK]/[ERROR]
-            # emoji because GIMP's latin-1 display path crashes on it.
-            err_text = _ascii_safe(str(e) or repr(e))
-            msg = "[ERROR] kie.ai Nano Banana 2 text-to-image failed: " + err_text
-            _log("user-facing error: " + msg)
+            msg = "❌ kie.ai Nano Banana 2 text-to-image failed: " + str(e)
             Gimp.message(msg)
             return procedure.new_return_values(
-                Gimp.PDBStatusType.EXECUTION_ERROR, _make_glib_error(msg))
+                Gimp.PDBStatusType.EXECUTION_ERROR, GLib.Error(msg))
         except Exception as e:
             _log("UNEXPECTED FAILURE:\n" + traceback.format_exc())
-            err_text = _ascii_safe(repr(e))
-            msg = "[ERROR] kie.ai Nano Banana 2 text-to-image failed (unexpected): " + err_text
-            _log("user-facing error: " + msg)
+            msg = "❌ kie.ai Nano Banana 2 text-to-image failed (unexpected): " + repr(e)
             Gimp.message(msg)
             return procedure.new_return_values(
-                Gimp.PDBStatusType.EXECUTION_ERROR, _make_glib_error(msg))
+                Gimp.PDBStatusType.EXECUTION_ERROR, GLib.Error(msg))
         finally:
             if result_path and shown:
                 try:
