@@ -87,9 +87,18 @@ def _http_get_json(url, api_key):
 
 
 def submit_text_to_image(api_key, prompt, aspect_ratio):
+    # SEEDREAM PRO t2i requires quality/output_format/nsfw_checker (per kie.ai
+    # createTask sample). They are hardcoded here to keep the dialog simple
+    # (prompt + aspect_ratio + api_key only); edit this function to change them.
     payload = {
         "model": KIE_MODEL,
-        "input": {"prompt": prompt, "aspect_ratio": aspect_ratio},
+        "input": {
+            "prompt": prompt,
+            "aspect_ratio": aspect_ratio,
+            "quality": "basic",
+            "output_format": "png",
+            "nsfw_checker": False,
+        },
     }
     data = _http_post_json(JOBS_BASE + "/jobs/createTask", payload, api_key)
     if data.get("code") != 200:
